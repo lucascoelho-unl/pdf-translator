@@ -60,6 +60,10 @@ def get_translation_prompt(
     return "\n".join(prompt_parts)
 
 
+MAX_RETRIES = 3
+INITIAL_BACKOFF_SECONDS = 2
+
+
 async def translate_single_chunk(
     chunk: TranslationChunk,
     target_language: str,
@@ -68,7 +72,7 @@ async def translate_single_chunk(
     semaphore: asyncio.Semaphore,
 ) -> TranslatedChunk:
     """
-    Translate a single chunk with rate limiting.
+    Translate a single chunk with rate limiting and automatic retry.
 
     Args:
         chunk: The chunk to translate
@@ -94,31 +98,45 @@ async def translate_single_chunk(
             HumanMessage(content=prompt),
         ]
 
-        try:
-            response = await llm.ainvoke(messages)
-            content = response.content
-            if isinstance(content, list):
-                translated_text = "".join(
-                    part.get("text", "") if isinstance(part, dict) else str(part)
-                    for part in content
-                ).strip()
-            else:
-                translated_text = str(content).strip()
+        last_error = None
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                response = await llm.ainvoke(messages)
+                content = response.content
+                if isinstance(content, list):
+                    translated_text = "".join(
+                        part.get("text", "") if isinstance(part, dict) else str(part)
+                        for part in content
+                    ).strip()
+                else:
+                    translated_text = str(content).strip()
 
-            return TranslatedChunk(
-                id=chunk.id,
-                original_text=chunk.text,
-                translated_text=translated_text,
-                block_type=chunk.block_type,
-            )
-        except Exception as e:
-            logger.error(f"Failed to translate chunk {chunk.id}: {e}")
-            return TranslatedChunk(
-                id=chunk.id,
-                original_text=chunk.text,
-                translated_text=f"[TRANSLATION ERROR: {chunk.text}]",
-                block_type=chunk.block_type,
-            )
+                return TranslatedChunk(
+                    id=chunk.id,
+                    original_text=chunk.text,
+                    translated_text=translated_text,
+                    block_type=chunk.block_type,
+                )
+            except Exception as e:
+                last_error = e
+                if attempt < MAX_RETRIES:
+                    backoff_time = INITIAL_BACKOFF_SECONDS * (2 ** attempt)
+                    logger.warning(
+                        f"Chunk {chunk.id[:8]}... failed (attempt {attempt + 1}/{MAX_RETRIES + 1}): {e}. "
+                        f"Retrying in {backoff_time}s..."
+                    )
+                    await asyncio.sleep(backoff_time)
+                else:
+                    logger.error(
+                        f"Chunk {chunk.id[:8]}... failed after {MAX_RETRIES + 1} attempts: {e}"
+                    )
+
+        return TranslatedChunk(
+            id=chunk.id,
+            original_text=chunk.text,
+            translated_text=f"[TRANSLATION ERROR: {chunk.text}]",
+            block_type=chunk.block_type,
+        )
 
 
 async def translate_chunks(state: TranslationState) -> dict:
