@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="{{ language }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Translated Document</title>
+    <style>
+        @page {
+            size: {{ page_width }}mm {{ page_height }}mm;
+            margin: 20mm;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'DejaVu Sans', 'Noto Sans', Arial, sans-serif;
+            font-size: 11pt;
+            line-height: 1.5;
+            color: #333;
+            margin: 0;
+            padding: 0;
+        }
+
+        .page-break {
+            page-break-after: always;
+        }
+
+        .heading-1 {
+            font-size: 2em;
+            font-weight: bold;
+            margin: 1em 0 0.5em 0;
+            page-break-after: avoid;
+        }
+
+        .heading-2 {
+            font-size: 1.5em;
+            font-weight: bold;
+            margin: 0.8em 0 0.4em 0;
+            page-break-after: avoid;
+        }
+
+        .heading-3 {
+            font-size: 1.2em;
+            font-weight: bold;
+            margin: 0.6em 0 0.3em 0;
+            page-break-after: avoid;
+        }
+
+        .paragraph {
+            text-align: justify;
+            margin-bottom: 1em;
+            orphans: 3;
+            widows: 3;
+        }
+
+        .list-item {
+            margin-left: 2em;
+            margin-bottom: 0.5em;
+        }
+
+        .caption {
+            font-style: italic;
+            font-size: 0.9em;
+            text-align: center;
+            margin: 0.5em 0 1em 0;
+            color: #666;
+        }
+
+        .image-container {
+            text-align: center;
+            margin: 1em 0;
+            page-break-inside: avoid;
+        }
+
+        .image {
+            max-width: 100%;
+            height: auto;
+        }
+
+        .table-container {
+            margin: 1em 0;
+            page-break-inside: avoid;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 1em;
+        }
+
+        th, td {
+            border: 1px solid #ccc;
+            padding: 0.5em;
+            text-align: left;
+        }
+
+        th {
+            background-color: #f5f5f5;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    {% for block in blocks %}
+        {% if block.block_type == 'heading' %}
+            <h2 class="heading-2">{{ block.text }}</h2>
+        {% elif block.block_type == 'title' %}
+            <h1 class="heading-1">{{ block.text }}</h1>
+        {% elif block.block_type == 'section_header' %}
+            <h3 class="heading-3">{{ block.text }}</h3>
+        {% elif block.block_type == 'image' %}
+            <div class="image-container">
+                <img class="image" src="data:image/{{ block.image_format }};base64,{{ block.image_data }}" alt="{{ block.alt_text | default('Image') }}"/>
+            </div>
+        {% elif block.block_type == 'caption' %}
+            <p class="caption">{{ block.text }}</p>
+        {% elif block.block_type == 'list_item' %}
+            <p class="list-item">• {{ block.text }}</p>
+        {% elif block.block_type == 'table' %}
+            <div class="table-container">
+                {{ block.html_content | safe }}
+            </div>
+        {% else %}
+            <p class="paragraph">{{ block.text }}</p>
+        {% endif %}
+    {% endfor %}
+</body>
+</html>
