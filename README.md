@@ -35,7 +35,13 @@ python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 ```
 
-3. Install dependencies:
+3. Install system dependencies (macOS):
+
+```bash
+brew install pango gdk-pixbuf libffi cairo gobject-introspection
+```
+
+4. Install Python dependencies:
 
 ```bash
 pip install -r requirements.txt
@@ -80,6 +86,33 @@ python -m src.main data/manual.pdf --language es --verbose
 # Translate to French
 python -m src.main data/article.pdf --language fr
 ```
+
+### Supported Languages
+
+You can use any language that Gemini supports. Here are common language codes:
+
+| Language | Code | Example |
+|----------|------|---------|
+| Spanish | `es` | `--language es` |
+| Spanish (Mexico) | `es-MX` | `--language es-MX` |
+| Portuguese (Brazil) | `pt-BR` | `--language pt-BR` |
+| Portuguese (Portugal) | `pt-PT` | `--language pt-PT` |
+| French | `fr` | `--language fr` |
+| German | `de` | `--language de` |
+| Italian | `it` | `--language it` |
+| Dutch | `nl` | `--language nl` |
+| Russian | `ru` | `--language ru` |
+| Japanese | `ja` | `--language ja` |
+| Chinese (Simplified) | `zh-CN` | `--language zh-CN` |
+| Chinese (Traditional) | `zh-TW` | `--language zh-TW` |
+| Korean | `ko` | `--language ko` |
+| Arabic | `ar` | `--language ar` |
+| Hindi | `hi` | `--language hi` |
+| Polish | `pl` | `--language pl` |
+| Turkish | `tr` | `--language tr` |
+| Vietnamese | `vi` | `--language vi` |
+| Thai | `th` | `--language th` |
+| Indonesian | `id` | `--language id` |
 
 ## Project Structure
 

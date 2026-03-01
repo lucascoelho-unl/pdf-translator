@@ -96,7 +96,14 @@ async def build_glossary(state: TranslationState) -> dict:
 
     try:
         response = await llm.ainvoke(messages)
-        response_text = response.content
+        content = response.content
+        if isinstance(content, list):
+            response_text = "".join(
+                part.get("text", "") if isinstance(part, dict) else str(part)
+                for part in content
+            )
+        else:
+            response_text = str(content)
 
         response_text = response_text.strip()
         if response_text.startswith("```json"):

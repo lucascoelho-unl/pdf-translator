@@ -58,30 +58,38 @@ class DocumentExtractor:
             pdf_doc.close()
 
         reading_order = 0
-        for item in doc.iterate_items():
-            element = item
+        for item, _level in doc.iterate_items():
+            text_content = None
             if hasattr(item, "text") and item.text:
-                block_type = self._map_element_type(element)
+                text_content = item.text
+            elif hasattr(item, "export_to_markdown"):
+                try:
+                    text_content = item.export_to_markdown()
+                except Exception:
+                    pass
+
+            if text_content and text_content.strip():
+                block_type = self._map_element_type(item)
 
                 page_num = 1
                 bbox = None
-                if hasattr(element, "prov") and element.prov:
-                    prov = element.prov[0] if element.prov else None
-                    if prov:
+                if hasattr(item, "prov") and item.prov:
+                    prov_list = item.prov if isinstance(item.prov, list) else [item.prov]
+                    if prov_list:
+                        prov = prov_list[0]
                         page_num = getattr(prov, "page_no", 1) or 1
-                        if hasattr(prov, "bbox"):
+                        if hasattr(prov, "bbox") and prov.bbox:
                             bbox_obj = prov.bbox
-                            if bbox_obj:
-                                bbox = (
-                                    float(bbox_obj.l),
-                                    float(bbox_obj.t),
-                                    float(bbox_obj.r),
-                                    float(bbox_obj.b),
-                                )
+                            bbox = (
+                                float(getattr(bbox_obj, "l", 0)),
+                                float(getattr(bbox_obj, "t", 0)),
+                                float(getattr(bbox_obj, "r", 0)),
+                                float(getattr(bbox_obj, "b", 0)),
+                            )
 
                 text_block = TextBlock(
                     id=str(uuid.uuid4()),
-                    text=element.text.strip(),
+                    text=text_content.strip(),
                     block_type=block_type,
                     page_number=page_num,
                     bbox=bbox,

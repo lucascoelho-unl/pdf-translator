@@ -5,6 +5,7 @@ import logging
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
+from tqdm.asyncio import tqdm_asyncio
 
 from src.config import get_settings
 from src.models.document import TranslatedChunk, TranslationChunk
@@ -95,7 +96,14 @@ async def translate_single_chunk(
 
         try:
             response = await llm.ainvoke(messages)
-            translated_text = response.content.strip()
+            content = response.content
+            if isinstance(content, list):
+                translated_text = "".join(
+                    part.get("text", "") if isinstance(part, dict) else str(part)
+                    for part in content
+                ).strip()
+            else:
+                translated_text = str(content).strip()
 
             return TranslatedChunk(
                 id=chunk.id,
@@ -152,7 +160,13 @@ async def translate_chunks(state: TranslationState) -> dict:
         for chunk in chunks
     ]
 
-    translated_chunks = await asyncio.gather(*tasks)
+    translated_chunks = await tqdm_asyncio.gather(
+        *tasks,
+        desc="Translating",
+        unit="chunk",
+        ncols=80,
+        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
+    )
 
     success_count = sum(
         1 for c in translated_chunks if not c.translated_text.startswith("[TRANSLATION ERROR")
