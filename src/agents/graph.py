@@ -11,7 +11,8 @@ from src.config import get_settings
 from src.models.state import TranslationState
 from src.services.chunker import create_translation_chunks
 from src.services.extractor import DocumentExtractor
-from src.services.rebuilder import PDFRebuilder
+from src.models.state import OutputFormat
+from src.services.rebuilder import DocumentRebuilder
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +30,21 @@ async def extract_document(state: TranslationState) -> dict:
     extractor = DocumentExtractor()
     document = extractor.extract(input_path)
 
+    pages_with_blocks = set()
+    for block in document.blocks:
+        pages_with_blocks.add(block.page_number)
+
+    pages_without_text = set(range(1, document.total_pages + 1)) - pages_with_blocks
+    if pages_without_text:
+        logger.warning(
+            f"Pages with NO extracted text blocks: {sorted(pages_without_text)}. "
+            f"These pages may contain only images or be blank."
+        )
+
     logger.info(
         f"Extracted {len(document.blocks)} blocks and {len(document.images)} images "
-        f"from {document.total_pages} pages"
+        f"from {document.total_pages} pages "
+        f"(text found on {len(pages_with_blocks)}/{document.total_pages} pages)"
     )
 
     return {"document": document}
@@ -49,35 +62,60 @@ async def chunk_document(state: TranslationState) -> dict:
 
     chunks = create_translation_chunks(document)
 
-    logger.info(f"Created {len(chunks)} chunks for translation")
+    total_blocks = len(document.blocks)
+    skipped = total_blocks - len(chunks)
+    logger.info(
+        f"Created {len(chunks)} chunks for translation "
+        f"({skipped} blocks skipped as headers/footers/page numbers)"
+    )
+
+    if len(chunks) == 0:
+        logger.error("No translatable chunks were created from the document!")
+    elif len(chunks) < total_blocks * 0.5:
+        logger.warning(
+            f"Only {len(chunks)}/{total_blocks} blocks will be translated. "
+            f"Check if the extractor is capturing all content."
+        )
 
     return {"chunks": chunks}
 
 
-async def rebuild_pdf_node(state: TranslationState) -> dict:
+async def rebuild_document_node(state: TranslationState) -> dict:
     """
-    LangGraph node: Rebuild PDF with translated content.
+    LangGraph node: Rebuild document with translated content.
 
-    Phase 4 of the pipeline - generates a new PDF from translated
-    content using HTML/CSS intermediate format.
+    Phase 4 of the pipeline - generates a new PDF or DOCX from translated
+    content.
     """
     settings = get_settings()
     document = state["document"]
     translated_chunks = state["translated_chunks"]
     target_language = state["target_language"]
+    output_format: OutputFormat = state.get("output_format", "pdf")
 
     input_path = Path(state["input_path"])
-    output_filename = f"{input_path.stem}_{target_language}{input_path.suffix}"
+    extension = ".docx" if output_format == "docx" else ".pdf"
+    output_filename = f"{input_path.stem}_{target_language}{extension}"
     output_path = settings.output_dir / output_filename
 
-    logger.info(f"Phase 4: Rebuilding PDF to {output_path}")
+    total_blocks = len(document.blocks)
+    translated_count = len(translated_chunks)
+    failed_count = sum(
+        1 for c in translated_chunks if c.translated_text.startswith("[TRANSLATION ERROR")
+    )
+    logger.info(
+        f"Phase 4: Rebuilding {output_format.upper()} to {output_path} "
+        f"({translated_count} translated chunks, {failed_count} failed, "
+        f"{total_blocks} total blocks)"
+    )
 
-    rebuilder = PDFRebuilder()
+    rebuilder = DocumentRebuilder()
     final_path = rebuilder.rebuild(
         document=document,
         translated_chunks=translated_chunks,
         output_path=output_path,
         target_language=target_language,
+        output_format=output_format,
     )
 
     logger.info(f"Translation complete: {final_path}")
@@ -112,7 +150,7 @@ def build_translation_graph() -> StateGraph:
     workflow.add_node("chunk_document", chunk_document)
     workflow.add_node("translate_chunks", translate_chunks)
     workflow.add_node("validate_translations", validate_translations)
-    workflow.add_node("rebuild_pdf", rebuild_pdf_node)
+    workflow.add_node("rebuild_pdf", rebuild_document_node)
 
     workflow.set_entry_point("extract_document")
 
@@ -129,6 +167,7 @@ def build_translation_graph() -> StateGraph:
 async def run_translation(
     input_path: str | Path,
     target_language: str,
+    output_format: OutputFormat = "pdf",
 ) -> str:
     """
     Run the complete translation pipeline.
@@ -136,15 +175,17 @@ async def run_translation(
     Args:
         input_path: Path to the input PDF
         target_language: Target language code (e.g., 'pt-BR', 'es', 'fr')
+        output_format: Output format ('pdf' or 'docx')
 
     Returns:
-        Path to the generated translated PDF
+        Path to the generated translated document
     """
     graph = build_translation_graph()
 
     initial_state: TranslationState = {
         "input_path": str(input_path),
         "target_language": target_language,
+        "output_format": output_format,
     }
 
     result = await graph.ainvoke(initial_state)

@@ -13,19 +13,24 @@ from src.models.state import Glossary, TranslationState
 
 logger = logging.getLogger(__name__)
 
-TRANSLATION_SYSTEM_PROMPT = """You are an expert translator. Your task is to translate text while:
-1. Maintaining the original meaning and nuance
-2. Preserving the tone and style of the original
-3. Using the provided glossary for consistent terminology
-4. Maintaining narrative flow with the provided context
+TRANSLATION_SYSTEM_PROMPT = """You are an expert publication-quality translator. Your translations must be indistinguishable from text originally written by a native speaker of the target language.
 
-Rules:
-- Translate naturally, not literally
+CORE PRINCIPLES:
+1. Translate naturally and idiomatically — NEVER translate literally word-by-word
+2. Maintain the original meaning, nuance, and emotional impact
+3. Preserve the tone, register, and style of the original
+4. Use the provided glossary strictly for consistent terminology
+5. Maintain narrative flow using the provided context
+
+MANDATORY RULES:
+- DIALECT CONSISTENCY: Use ONLY the dialect/variant specified in the glossary. Every pronoun, verb conjugation, and vocabulary choice must conform to the SAME dialect throughout. NEVER mix regional forms (e.g., never mix "vosotros" with "ustedes").
+- ZERO SOURCE LANGUAGE CONTAMINATION: Your output must contain ABSOLUTELY NO words from the source language. Every single word must be in the target language. Double-check that no source-language words were accidentally left in the text.
+- CLINICAL/TECHNICAL TERMS: Use the OFFICIAL terminology from the glossary. For psychological terms (e.g., Schema Therapy), use the academically established translations — never literal translations.
+- BIBLICAL CITATIONS: If the text contains Bible verses, use the OFFICIAL published Bible version in the target language (as specified in the glossary, e.g., NVI or Reina-Valera 1960 for Spanish). Do NOT translate Bible verses literally from the source — reproduce the exact text from the official version.
 - Preserve formatting (paragraphs, lists, etc.)
-- Keep proper nouns consistent with the glossary
-- Match the formality level of the original
-- Do not add explanations or notes - only output the translation
-- If the text contains code, URLs, or technical identifiers, keep them unchanged"""
+- Do not add explanations, notes, or translator comments — output ONLY the translation
+- If the text contains code, URLs, or technical identifiers, keep them unchanged
+- Do not omit or skip any part of the source text — translate EVERYTHING"""
 
 
 def get_translation_prompt(
@@ -194,6 +199,20 @@ async def translate_chunks(state: TranslationState) -> dict:
     return {"translated_chunks": list(translated_chunks)}
 
 
+def _check_source_contamination(
+    text: str,
+    forbidden_words: list[str],
+) -> list[str]:
+    """Check translated text for source-language word contamination."""
+    found = []
+    text_lower = text.lower()
+    words_in_text = set(text_lower.split())
+    for word in forbidden_words:
+        if word.lower() in words_in_text:
+            found.append(word)
+    return found
+
+
 async def validate_translations(state: TranslationState) -> dict:
     """
     LangGraph node that validates translation quality.
@@ -201,16 +220,20 @@ async def validate_translations(state: TranslationState) -> dict:
     Checks for:
     - Missing translations
     - Suspiciously short or long translations
-    - Untranslated content
+    - Source-language contamination
+    - Failed translation chunks (retries them)
 
     Args:
         state: Current translation state with translated chunks
 
     Returns:
-        Updated state (potentially with retry flags)
+        Updated state with retried chunks if needed
     """
-    translated_chunks = state["translated_chunks"]
+    settings = get_settings()
+    translated_chunks = list(state["translated_chunks"])
     chunks = state["chunks"]
+    glossary = state["glossary"]
+    target_language = state["target_language"]
 
     original_ids = {c.id for c in chunks}
     translated_ids = {c.id for c in translated_chunks}
@@ -219,23 +242,89 @@ async def validate_translations(state: TranslationState) -> dict:
     if missing:
         logger.warning(f"Missing translations for {len(missing)} chunks")
 
+    forbidden_words = glossary.forbidden_source_words if glossary else []
+
     issues = []
+    failed_chunk_ids = set()
+    contaminated_chunk_ids = set()
+
     for chunk in translated_chunks:
         if chunk.translated_text.startswith("[TRANSLATION ERROR"):
-            issues.append(f"Chunk {chunk.id}: Translation failed")
+            issues.append(f"Chunk {chunk.id[:8]}: Translation failed")
+            failed_chunk_ids.add(chunk.id)
             continue
 
         original_len = len(chunk.original_text)
         translated_len = len(chunk.translated_text)
 
         if translated_len < original_len * 0.3:
-            issues.append(f"Chunk {chunk.id}: Translation suspiciously short")
+            issues.append(f"Chunk {chunk.id[:8]}: Translation suspiciously short ({translated_len} vs {original_len} chars)")
         elif translated_len > original_len * 3:
-            issues.append(f"Chunk {chunk.id}: Translation suspiciously long")
+            issues.append(f"Chunk {chunk.id[:8]}: Translation suspiciously long ({translated_len} vs {original_len} chars)")
+
+        if forbidden_words:
+            contamination = _check_source_contamination(chunk.translated_text, forbidden_words)
+            if contamination:
+                issues.append(
+                    f"Chunk {chunk.id[:8]}: Source language contamination detected: {contamination}"
+                )
+                contaminated_chunk_ids.add(chunk.id)
 
     if issues:
-        logger.warning(f"Translation validation found {len(issues)} issues")
-        for issue in issues[:5]:
+        logger.warning(f"Translation validation found {len(issues)} issues:")
+        for issue in issues:
             logger.warning(f"  - {issue}")
+
+    chunks_to_retry_ids = failed_chunk_ids | contaminated_chunk_ids
+    if chunks_to_retry_ids:
+        logger.info(f"Retrying {len(chunks_to_retry_ids)} problematic chunks...")
+
+        chunks_to_retry = [c for c in chunks if c.id in chunks_to_retry_ids]
+
+        llm = ChatGoogleGenerativeAI(
+            model=settings.gemini_model,
+            google_api_key=settings.google_api_key,
+            temperature=0.2,
+        )
+        semaphore = asyncio.Semaphore(settings.max_concurrent_translations)
+
+        retry_tasks = [
+            translate_single_chunk(
+                chunk=chunk,
+                target_language=target_language,
+                glossary=glossary,
+                llm=llm,
+                semaphore=semaphore,
+            )
+            for chunk in chunks_to_retry
+        ]
+
+        retried_results = await asyncio.gather(*retry_tasks)
+
+        retried_map = {c.id: c for c in retried_results}
+        final_chunks = []
+        for chunk in translated_chunks:
+            if chunk.id in retried_map:
+                retried = retried_map[chunk.id]
+                if not retried.translated_text.startswith("[TRANSLATION ERROR"):
+                    final_chunks.append(retried)
+                    logger.info(f"Chunk {chunk.id[:8]}: Retry succeeded")
+                else:
+                    final_chunks.append(chunk)
+                    logger.warning(f"Chunk {chunk.id[:8]}: Retry also failed")
+            else:
+                final_chunks.append(chunk)
+
+        success_rate = sum(
+            1 for c in final_chunks if not c.translated_text.startswith("[TRANSLATION ERROR")
+        ) / max(len(final_chunks), 1) * 100
+        logger.info(f"Final translation success rate: {success_rate:.1f}%")
+
+        return {"translated_chunks": final_chunks}
+
+    success_rate = sum(
+        1 for c in translated_chunks if not c.translated_text.startswith("[TRANSLATION ERROR")
+    ) / max(len(translated_chunks), 1) * 100
+    logger.info(f"Translation validation complete. Success rate: {success_rate:.1f}%")
 
     return {}

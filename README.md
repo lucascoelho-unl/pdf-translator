@@ -70,14 +70,15 @@ positional arguments:
 
 options:
   -l, --language LANG   Target language code (e.g., pt-BR, es, fr, de)
-  -o, --output PATH     Output PDF path (optional, auto-generated if not specified)
+  -f, --format FORMAT   Output format: 'pdf' or 'docx' (default: pdf)
+  -o, --output PATH     Output file path (optional, auto-generated if not specified)
   -v, --verbose         Enable verbose logging
 ```
 
 ### Examples
 
 ```bash
-# Translate to Brazilian Portuguese
+# Translate to Brazilian Portuguese (PDF output)
 python -m src.main data/book.pdf --language pt-BR
 
 # Translate to Spanish with verbose logging
@@ -85,6 +86,9 @@ python -m src.main data/manual.pdf --language es --verbose
 
 # Translate to French
 python -m src.main data/article.pdf --language fr
+
+# Translate to Spanish as Word document
+python -m src.main data/book.pdf --language es --format docx
 ```
 
 ### Supported Languages

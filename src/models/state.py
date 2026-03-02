@@ -1,6 +1,6 @@
 """LangGraph state schemas for the translation workflow."""
 
-from typing import Annotated, TypedDict
+from typing import Annotated, Literal, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -38,9 +38,21 @@ class Glossary(BaseModel):
         default="general",
         description="Genre of the document (fiction, technical, academic, etc.)",
     )
+    language_variant: str = Field(
+        default="",
+        description="Specific language variant (e.g., 'Brazilian Portuguese', 'Mexican Spanish')",
+    )
     style_notes: str = Field(
         default="",
         description="Additional style guidance for translation",
+    )
+    source_language: str = Field(
+        default="",
+        description="Detected source language of the document",
+    )
+    forbidden_source_words: list[str] = Field(
+        default_factory=list,
+        description="Common source-language words that must never appear in the translation",
     )
 
     def to_prompt(self) -> str:
@@ -50,8 +62,30 @@ class Glossary(BaseModel):
             f"Document genre: {self.genre}",
         ]
 
+        if self.language_variant:
+            lines.extend([
+                "",
+                "=== DIALECT / LANGUAGE VARIANT (MANDATORY) ===",
+                f"Target variant: {self.language_variant}",
+                "You MUST use vocabulary, spelling, grammar, and pronoun forms specific to this variant consistently throughout the ENTIRE translation.",
+                "Do NOT mix dialect forms. Every sentence must conform to the same variant.",
+            ])
+
+        if self.source_language:
+            lines.extend([
+                "",
+                "=== SOURCE LANGUAGE CONTAMINATION PREVENTION ===",
+                f"Source language: {self.source_language}",
+                "CRITICAL: The translation must contain ZERO words from the source language.",
+                "Do not leave any source-language words untranslated. Every word must be in the target language.",
+                "Pay special attention to common false cognates and words that look similar between languages.",
+            ])
+
+        if self.forbidden_source_words:
+            lines.append(f"Common source words that MUST NOT appear in the output: {', '.join(self.forbidden_source_words)}")
+
         if self.style_notes:
-            lines.append(f"Style notes: {self.style_notes}")
+            lines.extend(["", f"Style notes: {self.style_notes}"])
 
         if self.entries:
             lines.append("\nGlossary of terms (use these translations consistently):")
@@ -68,13 +102,14 @@ def merge_translated_chunks(
     existing: list[TranslatedChunk],
     new: list[TranslatedChunk],
 ) -> list[TranslatedChunk]:
-    """Merge new translated chunks with existing ones."""
-    existing_ids = {chunk.id for chunk in existing}
-    merged = list(existing)
-    for chunk in new:
-        if chunk.id not in existing_ids:
-            merged.append(chunk)
+    """Merge new translated chunks with existing ones, preferring newer versions."""
+    new_ids = {chunk.id for chunk in new}
+    merged = [chunk for chunk in existing if chunk.id not in new_ids]
+    merged.extend(new)
     return merged
+
+
+OutputFormat = Literal["pdf", "docx"]
 
 
 class TranslationState(TypedDict, total=False):
@@ -82,6 +117,7 @@ class TranslationState(TypedDict, total=False):
 
     input_path: str
     target_language: str
+    output_format: OutputFormat
     document: ExtractedDocument
     glossary: Glossary
     chunks: list[TranslationChunk]

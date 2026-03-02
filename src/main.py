@@ -21,6 +21,7 @@ Examples:
   python -m src.main data/book.pdf --language pt-BR
   python -m src.main data/manual.pdf --language es
   python -m src.main data/article.pdf --language fr --verbose
+  python -m src.main data/book.pdf --language es --format docx
         """,
     )
 
@@ -39,10 +40,18 @@ Examples:
     )
 
     parser.add_argument(
+        "-f", "--format",
+        type=str,
+        choices=["pdf", "docx"],
+        default="pdf",
+        help="Output format: 'pdf' or 'docx' (default: pdf)",
+    )
+
+    parser.add_argument(
         "-o", "--output",
         type=Path,
         default=None,
-        help="Output PDF path (optional, auto-generated if not specified)",
+        help="Output file path (optional, auto-generated if not specified)",
     )
 
     parser.add_argument(
@@ -77,19 +86,22 @@ async def main() -> int:
         return 1
 
     target_language = args.language or settings.target_language
+    output_format = args.format
 
     logger.info(f"Starting translation of {input_path}")
     logger.info(f"Target language: {target_language}")
+    logger.info(f"Output format: {output_format.upper()}")
 
     try:
         output_path = await run_translation(
             input_path=input_path,
             target_language=target_language,
+            output_format=output_format,
         )
 
         logger.info(f"Translation completed successfully!")
         logger.info(f"Output saved to: {output_path}")
-        print(f"\nTranslated PDF saved to: {output_path}")
+        print(f"\nTranslated {output_format.upper()} saved to: {output_path}")
 
         return 0
 
